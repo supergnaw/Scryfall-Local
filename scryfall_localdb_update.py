@@ -4,10 +4,6 @@ import requests
 import json
 import tqdm # for progress bar
 import pymysql
-# import importlib
-# import glob
-# import pathlib
-# import datetime
 
 # GLOBALS
 DB_USER = "root"
@@ -175,11 +171,8 @@ for filename in tqdm.tqdm( os.listdir( directory )):
         cards = load_json( os.path.join(directory, filename ))
         for card in cards:
             db_insert_card( card, cnx )
-            # time.sleep( 0.05 )
-        # print( cards )
         card_count = len( cards )
         total_cards = card_count + total_cards
-        # print( f"{filename}: {card_count}" )
     else:
         continue
 print( f"Total cards: {total_cards}" )
