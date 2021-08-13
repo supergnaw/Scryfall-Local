@@ -58,7 +58,7 @@ def fetch_json_paged( uri ):
 		while True == more:
 			page = fetch_json( uri )
 			if( "error" == page["object"] ):
-				return None
+				return page["details"]
 			cards = cards + page["data"]
 			if True == page["has_more"]:
 				uri = page["next_page"]
@@ -121,6 +121,7 @@ def db_insert_card( card, cnx ):
         "power", "price_usd", "prices", "produced_mana",
         "rarity", "released_at", "set", "set_id",
         "set_name", "textless", "toughness", "type_line",
+        "variation_of", "flavor_text",
         "w", "u", "b", "r", "g"
     )
 
@@ -162,17 +163,31 @@ def db_insert_card( card, cnx ):
 
     db_execute( sql, params, cnx )
 
+clear()
+print( "=== UPDATING LOCAL SCRYFALL DATABASE ===\n" )
+print( "--Searching for local json dump files..." )
+jsonFiles = []
+directory = os.path.join( "json", "sets" )
+for filename in os.listdir( directory ):
+    if filename.endswith( "_cards.json" ):
+        jsonFiles.append( filename )
+jsonFileCount = len( jsonFiles )
+print( f"--Found {jsonFileCount} files." )
 total_cards = 0
 cnx = db_connect()
+print( "--Clearing database" )
 db_execute( "TRUNCATE cards", None, cnx )
-directory = os.path.join( "json", "sets" )
+print( "--Looping through json files...\n" )
 for filename in tqdm.tqdm( os.listdir( directory )):
     if filename.endswith( "_cards.json" ):
         cards = load_json( os.path.join(directory, filename ))
         for card in cards:
             db_insert_card( card, cnx )
+            # time.sleep( 0.05 )
+        # print( cards )
         card_count = len( cards )
         total_cards = card_count + total_cards
+        # print( f"{filename}: {card_count}" )
     else:
         continue
-print( f"Total cards: {total_cards}" )
+print( f"\nTotal cards: {total_cards}" )
