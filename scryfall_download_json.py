@@ -57,7 +57,7 @@ def fetch_json_paged( uri ):
 		while True == more:
 			page = fetch_json( uri )
 			if( "error" == page["object"] ):
-				return None
+				return page["details"]
 			cards = cards + page["data"]
 			if True == page["has_more"]:
 				uri = page["next_page"]
@@ -71,7 +71,7 @@ def fetch_json_paged( uri ):
 # --- WHERE THE GATHERING HAPPENS --- #
 # Fetch most recent data
 clear()
-print( "=== FETCHING SETS BULK JSON DUMP ===\n --Source URI: https://api.scryfall.com/sets\n\n" )
+print( "=== FETCHING SETS BULK JSON DUMP ===\n --Source URI: https://api.scryfall.com/sets\n" )
 setsJson = fetch_json_paged( "https://api.scryfall.com/sets" )
 filename = os.path.join( "json", "all_sets.json" )
 save_json( setsJson, filename )
@@ -93,14 +93,15 @@ for set in tqdm.tqdm( setsJson ):
 	# download and save new file
 	if False == os.path.exists( filename ):
 		cardsJson = fetch_json_paged( set['search_uri'] )
-		if None != cardsJson:
+		if isinstance( cardsJson, dict ):
 			save_json( cardsJson, filename )
 		else:
 			# print( set['code'] )
-			failed_sets.append( set['code'] )
+			failed_sets.append( "   " + set['code'].upper() + ": " + cardsJson )
 
 # Close out with the stats
 failed_count = len( failed_sets )
-print( "--Update complete with the following {failed_count} failures:" )
+print( f"--Update complete with the following {failed_count} failures:" )
 if( 0 < failed_count ):
-	print( failed_sets )
+	for failure in failed_sets:
+		print( failure )
