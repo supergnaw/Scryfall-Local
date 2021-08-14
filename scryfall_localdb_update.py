@@ -1,3 +1,4 @@
+# IMPORTS
 import os
 import time
 import requests
@@ -6,6 +7,11 @@ import tqdm # for progress bar
 import pymysql
 
 # GLOBALS
+# Time in seconds for how long until a JSON file is refreshed
+# (good if you run this automagically every so often)
+json_stale_age = 86400
+
+# Database connection settings
 DB_USER = "root"
 DB_PASS = ""
 DB_HOST = "localhost"
@@ -79,16 +85,15 @@ def db_connect():
 			password = DB_PASS,
 			database = DB_NAME,
 			charset='utf8',
-            cursorclass=pymysql.cursors.DictCursor
+			cursorclass=pymysql.cursors.DictCursor
 		)
+		cnx.autocommit( True )
 	except pymysql.err.OperationalError as e:
 		kill_err( e )
 	else:
 		return cnx
 
-def db_execute( query, params = None, cnx = None ):
-	if None == cnx:
-		cnx = db_connect()
+def db_execute( cnx, query, params = None ):
 	try:
 		cursor = cnx.cursor()
 		if None != params:
@@ -104,90 +109,114 @@ def db_execute( query, params = None, cnx = None ):
 	except ValueError as e:
 		kill_err( e, query )
 
-    # return
+	# return
 	res = cursor.fetchall()
 	if None != res:
 		return res
 	return rowsAffected
 
-# --- WHERE THE TRADING HAPPENS --- #
 def db_insert_card( card, cnx ):
-    whitelist = (
-        "border_color", "card_back_id", "cmc", "collector_number",
-        "color_identity", "color_indicator", "colors", "frame",
-        "full_art", "highres_image", "id", "image_status",
-        "json_object", "lang", "layout", "loyalty",
-        "mana_cost", "name", "oracle_id", "oracle_text",
-        "power", "price_usd", "prices", "produced_mana",
-        "rarity", "released_at", "set", "set_id",
-        "set_name", "textless", "toughness", "type_line",
-        "variation_of", "flavor_text",
-        "w", "u", "b", "r", "g"
-    )
+	# do some normalizing
+	for field in card:
+		if not isinstance( card[field], ( str, bool, int, float )):
+			if isinstance( card[field], list ):
+				card[field] = "['" + str( "','".join( [str( item ) for item in card[field]] )) + "']"
+			else:
+				card[field] = str( card[field] )
 
-    # minor normalizing
-    card["json_object"] = str( card )
+	cols = []
+	vals = []
+	params = []
+	for field in card:
+		cols.append( field )
+		vals.append( "%s" )
+		params.append( card[field] )
+	cols = "`, `".join( cols )
+	vals = ", ".join( vals )
+	sql = f"INSERT INTO cards ( `{cols}` ) VALUES ( {vals} )"
 
-    card["set_code"] = card["set"]
-    del card["set"]
+	# execution
+	return db_execute( cnx, sql, params )
 
-    if "usd" in card["prices"]:
-        card["price_usd"] = card["prices"]["usd"]
-
-    if "colors" not in card: card["colors"] = {}
-    card["w"] = 1 if "W" in card["colors"] else 0
-    card["u"] = 1 if "U" in card["colors"] else 0
-    card["b"] = 1 if "B" in card["colors"] else 0
-    card["r"] = 1 if "R" in card["colors"] else 0
-    card["g"] = 1 if "G" in card["colors"] else 0
-
-    for field in card:
-        if not isinstance( card[field], ( str, bool, int, float )):
-            card[field] = str( card[field] )
-            # print( field + " converted to string" )
-
-    # prepare statement preparing
-    cols = []
-    vals = []
-    params = []
-    for field in card:
-        if field in whitelist:
-            cols.append( field )
-            vals.append( "%s" )
-            params.append( card[field] )
-    cols = ", ".join( cols )
-    vals = ", ".join( vals )
-    sql = f"INSERT INTO cards ( {cols} ) VALUES ( {vals} )"
-    # print( sql )
-    # print( params )
-
-    db_execute( sql, params, cnx )
-
+# --- WHERE THE TRADING HAPPENS --- #
 clear()
-print( "=== UPDATING LOCAL SCRYFALL DATABASE ===\n" )
-print( "--Searching for local json dump files..." )
+# Fetch most recent data
+print( "=== FETCHING SETS BULK JSON DUMP ===\n --Source URI: https://api.scryfall.com/sets\n" )
+setsJson = fetch_json_paged( "https://api.scryfall.com/sets" )
+filename = os.path.join( "json", "all_sets.json" )
+save_json( setsJson, filename )
+
+print( "=== UPDATING SETS ===\n --Looping through sets; this could take a few...minutes.\n" )
+failed_sets = []
+for set in tqdm.tqdm( setsJson ):
+	# prepare the filename
+	filename = os.path.join( "json", "sets", f"{set['code']}_cards.json" )
+
+	# check if file already exists and remove it if it's stale
+	if True == os.path.exists( filename ):
+		modified = os.path.getmtime( filename )
+		rightNow = time.time()
+		if json_stale_age < rightNow - modified:
+			os.remove( filename )
+
+	# download and save new file
+	if False == os.path.exists( filename ):
+		cardsJson = fetch_json_paged( set['search_uri'] )
+		if isinstance( cardsJson, dict ):
+			save_json( cardsJson, filename )
+		else:
+			# print( set['code'] )
+			failed_sets.append( set['code'].upper() + ": " + cardsJson )
+
+# Close out with the stats
+failed_count = len( failed_sets )
+print( f"\n --Update complete with the following {failed_count} failures:" )
+if( 0 < failed_count ):
+	for failure in failed_sets:
+		words = failure.split( " " )
+		lines = []
+		line_length = 70
+		while 0 < len( failure ):
+			if line_length < len( failure ):
+				x = failure[0:line_length].rfind( " " )
+				if 0 == x:
+					lines.append( failure[0:line_length] + "-" )
+					failure = failure[line_length::]
+				else:
+					lines.append( failure[0:x] )
+					failure = failure[x+1::]
+			else:
+				lines.append( failure )
+				failure = ""
+		lines = "\n    ".join( lines )
+		print( f"\n  * {lines}" )
+
+print( "\n=== UPDATING LOCAL SCRYFALL DATABASE ===\n" )
+print( " --Searching for local json dump files..." )
 jsonFiles = []
 directory = os.path.join( "json", "sets" )
 for filename in os.listdir( directory ):
-    if filename.endswith( "_cards.json" ):
-        jsonFiles.append( filename )
+	if filename.endswith( "_cards.json" ):
+		jsonFiles.append( filename )
 jsonFileCount = len( jsonFiles )
-print( f"--Found {jsonFileCount} files." )
-total_cards = 0
+print( f" --Found {jsonFileCount} files." )
+
+print( " --Establishing database connection..." )
 cnx = db_connect()
-print( "--Clearing database" )
-db_execute( "TRUNCATE cards", None, cnx )
-print( "--Looping through json files...\n" )
-for filename in tqdm.tqdm( os.listdir( directory )):
-    if filename.endswith( "_cards.json" ):
-        cards = load_json( os.path.join(directory, filename ))
-        for card in cards:
-            db_insert_card( card, cnx )
-            # time.sleep( 0.05 )
-        # print( cards )
-        card_count = len( cards )
-        total_cards = card_count + total_cards
-        # print( f"{filename}: {card_count}" )
-    else:
-        continue
-print( f"\nTotal cards: {total_cards}" )
+
+print( " --Clearing cards in database..." )
+db_execute( cnx, "TRUNCATE cards" )
+
+print( " --Looping through json files...\n" )
+total_cards = 0
+for num, filename in enumerate( jsonFiles ):
+	if filename.endswith( "_cards.json" ):
+		cards = load_json( os.path.join(directory, filename ))
+		print( f"\n{num:>3}/{jsonFileCount} - {cards[0]['set_name']}" )
+		for card in tqdm.tqdm( cards ):
+			db_insert_card( card, cnx )
+		card_count = len( cards )
+		total_cards = card_count + total_cards
+	else:
+		continue
+print( f"\n  * Total cards: {total_cards}" )
