@@ -210,13 +210,10 @@ db_execute( cnx, "TRUNCATE cards" )
 print( " --Looping through json files...\n" )
 total_cards = 0
 for num, filename in enumerate( jsonFiles ):
-	if filename.endswith( "_cards.json" ):
-		cards = load_json( os.path.join(directory, filename ))
-		print( f"\n{num:>3}/{jsonFileCount} - {cards[0]['set_name']}" )
-		for card in tqdm.tqdm( cards ):
-			db_insert_card( card, cnx )
-		card_count = len( cards )
-		total_cards = card_count + total_cards
-	else:
-		continue
+	cards = load_json( os.path.join( directory, filename ))
+	print( f"\n{num:>3}/{jsonFileCount} - {cards[0]['set_name']}" )
+	for card in tqdm.tqdm( cards ):
+		db_insert_card( card, cnx )
+	card_count = len( cards )
+	total_cards = card_count + total_cards
 print( f"\n  * Total cards: {total_cards}" )
